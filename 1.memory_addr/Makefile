@@ -1,7 +1,7 @@
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 PWD       := $(shell pwd)
 
-obj-m     := phys_addr.o
+obj-m     := memory_addr.o
 
 all:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
