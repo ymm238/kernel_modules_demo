@@ -13,7 +13,7 @@ static void *vptr;
 
 /*
  * kmalloc GFP_KERNEL标志申请的内存位于直接映射区域
- * virt_addr = phys_addr + PAGE_OFFSET 大概率可能不成立
+ * virt_addr = phys_addr + PAGE_OFFSE
  * 可使用virt_to_phys、__pa等接口获取内存物理地址
  */
 static int kmalloc_memory_address(void)
@@ -23,8 +23,10 @@ static int kmalloc_memory_address(void)
 	    return -ENOMEM;
     printk(KERN_INFO "kptr virt: 0x%p\n", kptr);
     printk(KERN_INFO "kptr virt_to_phys: 0x%llx\n", virt_to_phys(kptr));
+	printk(KERN_INFO "kptr phys_to_virt(virt_to_phys(kptr)): 0x%p\n", phys_to_virt(virt_to_phys(kptr)));
 	printk(KERN_INFO "x86 64 PAGE_OFFSET: 0x%lx\n", PAGE_OFFSET);
-    printk(KERN_INFO "kptr __pa 0x%lx\n", __pa(kptr));
+	printk(KERN_INFO "kptr __pa 0x%lx\n", __pa(kptr));
+	printk(KERN_INFO "kptr virt - PAGE-OFFSET 0x%lx\n", (unsigned long)kptr - PAGE_OFFSET);
 	printk(KERN_INFO "kptr +4k virt_to_phys 0x%llx\n", virt_to_phys((void *)((char *)kptr + 4 * 1024)));
 	if(kptr) {
 		kfree(kptr);
