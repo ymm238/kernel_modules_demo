@@ -6,7 +6,7 @@
 #include "procfs.h"
 
 #define PROC_NAME       "procfs"
-#define MAX_BUF_SIZE    4 * 1024
+#define MAX_BUF_SIZE    4096
 
 /* 全局变量 */
 static struct proc_dir_entry *proc_file;
@@ -73,23 +73,47 @@ static ssize_t my_proc_write(struct file *file, const char __user *buf,
 
 static vm_fault_t page_fault_handler(struct vm_fault *vmf)
 {
-    struct vm_area_struct *vma = vmf->vma;
+	struct page *page;
     unsigned long address = vmf->address;
-    void *new_addr;
-    struct page *page;
+    unsigned long offset = vmf->pgoff;  // 页偏移量
 
-    // 分配页对齐的内存
-    new_addr = kmalloc(MAX_BUF_SIZE, GFP_KERNEL);
-    if (!new_addr)
+    // 打印调试信息
+    printk(KERN_INFO "Page Fault occurred at address: 0x%lx, offset: %lu\n", 
+           address, offset);
+
+    // 确保页面偏移在允许范围内
+    if (offset >= 2) {
+        printk(KERN_ERR "Page offset out of range\n");
+        return VM_FAULT_SIGBUS;
+    }
+
+    // 分配物理页
+    page = alloc_page(GFP_KERNEL);
+    if (!page) {
+        printk(KERN_ERR "Failed to allocate page\n");
         return VM_FAULT_OOM;
+    }
 
-    // 获取页面并增加引用计数
-    page = virt_to_page(new_addr);
-    get_page(page);
+    // 清零页面
+    clear_page(page_address(page));
 
-    return vm_insert_page(vma, address, page);
+    // 在第一个页面写入一些测试数据
+    if (offset == 0) {
+        new_addr = page_address(page);
+        sprintf(new_addr, "First Page: Offset %lu\n", offset);
+    }
+
+    // 在第二个页面写入不同的数据
+    if (offset == 1) {
+        new_addr = page_address(page);
+        sprintf(new_addr, "Second Page: Offset %lu\n", offset);
+    }
+
+    // 直接设置页错误的页面
+    vmf->page = page;
+
+    return 0;
 }
-
 
 static const struct vm_operations_struct my_vm_ops = {
     .fault = page_fault_handler,
@@ -109,6 +133,7 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __a
 {
 	switch(cmd) {
 		case MY_IOC_SHOW_INFO:
+			// pr_info("MY_IOC_SHOW_INFO %c\n", ((char *)new_addr)[0]);
 			pr_info("MY_IOC_SHOW_INFO %s\n", (char *)new_addr);
 			break;
 		default:
@@ -148,8 +173,6 @@ static void __exit my_proc_exit(void)
 {
     /* 移除 proc 文件 */
     proc_remove(proc_file);
-    if(new_addr)
-		kfree(new_addr);
 	pr_info("Proc file '%s' removed\n", PROC_NAME);
 }
 
