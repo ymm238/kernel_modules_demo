@@ -1,54 +1,34 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <string.h>
+#include <stdbool.h>
 
-#define MY_IOC_MAGIC            'k'
-#define MY_IOC_SHOW_INFO        _IO(MY_IOC_MAGIC, 0)
+#include "procfs_demo.h"
 
-#define BUFFER_SIZE		4096
 int main()
 {
-	char *buffer = "testabc\n";
-	const char *file_path = "/proc/procfs";
-	char buffer1[BUFFER_SIZE];
-	char *mapped_buf;
-	int result;
-	int fd = open(file_path, O_RDWR);
-	write(fd, buffer, BUFFER_SIZE);
-	read(fd, buffer1, BUFFER_SIZE);
-	printf("/proc/procfs context: %s\n", buffer1);
+	int ret;
+	struct ioctl_data data;
 
-	mapped_buf = mmap(NULL, 2 * BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	const char *file_path = "/proc/procfs";
+	int fd = open(file_path, O_RDWR);
 	
-	if (mapped_buf == MAP_FAILED) {
+	char *buffer = "test abc\n";
+	char* message_buffer;
+
+	/* 申请内存 */
+	data.value = MAX_BUF_SIZE;
+	ret = ioctl(fd,  KOS_IOC_ALLOC, &data);
+	printf("alloc phys addr: 0x%lx\n", data.addr);
+
+	message_buffer = mmap(NULL, MAX_BUF_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (message_buffer == MAP_FAILED) {
 		perror("mapped failed");
 		close(fd);
 		return -1;
 	}
 
-	printf("first page content: %s\n", mapped_buf);
-	strncpy(mapped_buf, "first page modified", 20);
-	
-	result = ioctl(fd, MY_IOC_SHOW_INFO, NULL);
-	if(result < 0) {
-		perror("ioctl failed");
-		close(fd);
-		return -1;
-	}
-	
-	printf("second page content: %s\n", mapped_buf + BUFFER_SIZE);
-	strncpy(mapped_buf + BUFFER_SIZE, "second page modified", 20);
-    
-	result = ioctl(fd, MY_IOC_SHOW_INFO, NULL);
-    if(result < 0) {
-        perror("ioctl failed");
-        close(fd);
-        return -1;
-    }
-    close(fd);
+	close(fd);
 	return 0;
 }
