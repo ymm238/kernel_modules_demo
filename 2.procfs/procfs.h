@@ -1,4 +1,21 @@
 #include <uapi/asm-generic/ioctl.h>
-#define MY_IOC_MAGIC			'k'
 
-#define MY_IOC_SHOW_INFO		_IO(MY_IOC_MAGIC, 0)
+#define PROC_NAME       "procfs"
+#define MAX_BUF_SIZE	(PAGE_SIZE * 4)
+
+typedef struct ioctl_data {
+	int		value;
+	bool	result;
+	unsigned long 	addr;
+	char	msg[1024];
+};
+
+#define KOS_IOC_MAGIC			'k'
+
+#define KOS_IOC_ALLOC		_IOWR(KOS_IOC_MAGIC, 0, struct ioctl_data)
+#define KOS_IOC_INIT		_IOWR(KOS_IOC_MAGIC, 1, struct ioctl_data)
+#define KOS_IOC_FREE		_IOWR(KOS_IOC_MAGIC, 2, struct ioctl_data)
+#define KOS_IOC_SHOW		_IO(KOS_IOC_MAGIC, 3)
+#define KOS_IOC_INFO		_IO(KOS_IOC_MAGIC, 4)
+#define KOS_IOC_INSERT		_IOW(KOS_IOC_MAGIC, 5, struct ioctl_data)
+#define KOS_IOC_DEC			_IOW(KOS_IOC_MAGIC, 6, struct ioctl_data)

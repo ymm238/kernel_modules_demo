@@ -1,140 +1,260 @@
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
+#include <asm/io.h>
+#include <asm/page_types.h>
+
 #include "procfs.h"
 
-#define PROC_NAME       "procfs"
-#define MAX_BUF_SIZE    4096
+#define PROC_NAME		"procfs"
+#define MAX_BUF_SIZE	(PAGE_SIZE * 4)
 
-/* 全局变量 */
+extern int vm_munmap(unsigned long start, size_t len);
+
 static struct proc_dir_entry *proc_file;
-static char kernel_buf[MAX_BUF_SIZE];    /* 内核缓冲区 */
-static size_t data_size;                 /* 实际数据大小 */
+static char kernel_buf[MAX_BUF_SIZE];	/* 内核缓冲区 */
+static size_t data_size;				/* 实际数据大小 */
 
-static void* new_addr;
-/* read 实现 */
+static char *message_buffer;
+static int buffer_size;
+
 static ssize_t my_proc_read(struct file *file, char __user *buf,
-                           size_t count, loff_t *ppos)
+								size_t count, loff_t *ppos)
 {
-    size_t copy_size;
-    int ret;
+	size_t copy_size;
+	int ret;
 
-    /* 检查是否已读取完毕 */
-    if (*ppos >= data_size)
-        return 0;
+	if (*ppos >= data_size)
+		return 0;
 
-    /* 计算本次要复制的大小 */
-    copy_size = min((size_t)(data_size - *ppos), count);
-
-    /* 将数据拷贝到用户空间 */
-    ret = copy_to_user(buf, kernel_buf + *ppos, copy_size);
-    if (ret) {
-        pr_err("Failed to copy data to user. ret %d\n", ret);
-        return -EFAULT;
-    }
-
-    /* 更新文件位置 */
-    *ppos += copy_size;
-
-    return copy_size;
+	copy_size = min((size_t)(data_size - *ppos), count);
+	ret = copy_to_user(buf, kernel_buf + *ppos, copy_size);
+	if (ret) {
+		pr_err("Failed to copy data to user. ret %d\n", ret);
+		 return -EFAULT;
+	}
+	*ppos += copy_size;
+	return copy_size;
 }
 
-/* write 实现 */
 static ssize_t my_proc_write(struct file *file, const char __user *buf,
-                            size_t count, loff_t *ppos)
+								 size_t count, loff_t *ppos)
 {
-    size_t write_size;
-    int ret;
+	size_t write_size;
+	int ret;
 
-    /* 防止缓冲区溢出 */
-    write_size = min(count, (size_t)MAX_BUF_SIZE - 1);
+	write_size = min(count, (size_t)MAX_BUF_SIZE - 1);
 
-    /* 清空原有数据 */
-    memset(kernel_buf, 0, MAX_BUF_SIZE);
+	memset(kernel_buf, 0, MAX_BUF_SIZE);
 
-    /* 从用户空间复制数据 */
-    ret = copy_from_user(kernel_buf, buf, write_size);
-    if (ret) {
-        pr_err("Failed to copy data from user. ret %d\n", ret);
-        return -EFAULT;
-    }
+	ret = copy_from_user(kernel_buf, buf, write_size);
+	if (ret) {
+	pr_err("Failed to copy data from user. ret %d\n", ret);
+	return -EFAULT;
+	}
 
-    /* 确保字符串以 null 结尾 */
-    kernel_buf[write_size] = '\0';
-    
-    /* 更新数据大小 */
-    data_size = write_size;
-
-    /* 返回实际写入的字节数 */
-    return count;
+	kernel_buf[write_size] = '\0';
+	data_size = write_size;
+	return count;
 }
 
 static vm_fault_t page_fault_handler(struct vm_fault *vmf)
 {
 	struct page *page;
-    unsigned long address = vmf->address;
-    unsigned long offset = vmf->pgoff;  // 页偏移量
+	unsigned long vmf_message_address;
+	unsigned long address = vmf->address;
+	unsigned long offset = vmf->pgoff;  // 页偏移量
 
-    // 打印调试信息
-    printk(KERN_INFO "Page Fault occurred at address: 0x%lx, offset: %lu\n", 
-           address, offset);
+	pr_info("Page Fault occurred at address: 0x%llx, offset: %lu\n",
+		address, offset);
 
-    // 确保页面偏移在允许范围内
-    if (offset >= 2) {
-        printk(KERN_ERR "Page offset out of range\n");
-        return VM_FAULT_SIGBUS;
-    }
 
-    // 分配物理页
-    page = alloc_page(GFP_KERNEL);
-    if (!page) {
-        printk(KERN_ERR "Failed to allocate page\n");
-        return VM_FAULT_OOM;
-    }
+	vmf_message_address = message_buffer + PAGE_SIZE * offset;
+	page = virt_to_page(vmf_message_address);
 
-    // 清零页面
-    clear_page(page_address(page));
-
-    // 在第一个页面写入一些测试数据
-    if (offset == 0) {
-        new_addr = page_address(page);
-        sprintf(new_addr, "First Page: Offset %lu\n", offset);
-    }
-
-    // 在第二个页面写入不同的数据
-    if (offset == 1) {
-        new_addr = page_address(page);
-        sprintf(new_addr, "Second Page: Offset %lu\n", offset);
-    }
-
-    // 直接设置页错误的页面
-    vmf->page = page;
-
-    return 0;
+	vmf->page = page;
+	return 0;
 }
 
 static const struct vm_operations_struct my_vm_ops = {
-    .fault = page_fault_handler,
+	.fault = page_fault_handler,
 };
 
 static int my_proc_mmap(struct file *file, struct vm_area_struct *vma)
 {
-    vma->vm_ops = &my_vm_ops;
-    
-    // 使用 VM_RESERVED 或更新的标志
-    vma->vm_flags |= VM_IO | VM_DONTEXPAND;
-
-    return 0;
+	vma->vm_ops = &my_vm_ops;
+	vma->vm_flags |= VM_IO | VM_DONTEXPAND;
+	return 0;
 }
-/* ioctl结构体 */
-static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __arg)
+
+static void print_message_buffer(void)
 {
+	int i, start_index = 0, end_index = 0;
+	phys_addr_t phys_addr = virt_to_phys(message_buffer);
+	for (i = 0; i < buffer_size - 1; i++)
+	{
+		if (*(message_buffer + i) == '\0' && *(message_buffer + i + 1) != '\0')
+			start_index = i + 1;
+		if (*(message_buffer + i) != '\0' && *(message_buffer + i + 1) == '\0')
+		{
+			end_index = i;
+			pr_info(">> phys_addr start_index: 0x%llx, end_index: 0x%llx\ncontent: %s\n",
+					phys_addr + start_index, phys_addr + end_index, message_buffer + start_index);
+		}
+	}
+}
+
+static unsigned long message_buffer_alloc(int size)
+{
+	if (message_buffer)
+		return 0;
+
+	message_buffer = kmalloc(size, GFP_KERNEL | __GFP_ZERO);
+	buffer_size = size;
+	if (message_buffer)
+		return virt_to_phys(message_buffer);
+	return -1;
+}
+
+static bool message_buffer_init(char* buf)
+{
+	if (*buf)
+		strcpy(message_buffer, buf);
+	else
+		memset(message_buffer, 0, buffer_size);
+	pr_info("messae buffer %s \n", message_buffer);
+	if (strcmp(message_buffer, buf))
+		return false;
+	return true;
+}
+
+static bool message_buffer_free(int size)
+{
+	int ret;
+	ret = vm_munmap(message_buffer + buffer_size - size, size);
+	pr_info("free ret %d\n", ret);
+	if (ret == 0) {
+		buffer_size -= size;
+		return true;
+	}
+	return false;
+}
+
+static void message_buffer_info(void)
+{
+	int i;
+	int percentage = 0;
+	unsigned long start_address, remain,
+				  available_address = 0UL,
+				  usage = 0UL;
+
+	start_address = virt_to_phys(message_buffer);
+
+	for (i = 0; i < buffer_size; i++) {
+		if (*(char *)(message_buffer + i) != '\0')
+			usage ++;
+		else
+			if (available_address == 0)
+				available_address = virt_to_phys(message_buffer + i);
+	}
+	remain = buffer_size - usage;
+	if (buffer_size)
+		percentage = remain * 100 / buffer_size;
+	pr_info("[message_buffer_info] remain %ld, percentage %d, start_address 0x%llx, available_address 0x%llx\n",
+					remain, percentage, start_address, available_address);
+	print_message_buffer();
+}
+
+static void message_buffer_insert(unsigned long offset, char *buf)
+{
+	strcpy(message_buffer + offset, buf);
+}
+
+static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
+{
+	struct ioctl_data data;
+	int size, ret;
+	bool result;
+
 	switch(cmd) {
-		case MY_IOC_SHOW_INFO:
-			// pr_info("MY_IOC_SHOW_INFO %c\n", ((char *)new_addr)[0]);
-			pr_info("MY_IOC_SHOW_INFO %s\n", (char *)new_addr);
+		case KOS_IOC_ALLOC:
+			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data from user. ret %d\n", ret);
+			return -EFAULT;
+			}
+
+			size = data.value;
+			memset(&data, 0, sizeof(struct ioctl_data));
+			data.addr = message_buffer_alloc(size);
+			pr_info("phys addr 0x%lx\n", data.addr);
+
+			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data to user. ret %d\n", ret);
+				return -EFAULT;
+			}
+			break;
+		case KOS_IOC_INIT:
+			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data from user. ret %d\n", ret);
+				 return -EFAULT;
+			}
+			
+			result = message_buffer_init(data.msg);
+			memset(&data, 0, sizeof(struct ioctl_data));
+			data.result = result;
+			pr_info("message_buffer_init result: %s\n", result ? "success" : "failed");
+
+			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data to user. ret %d\n", ret);
+				return -EFAULT;
+			}
+			break;
+		/* TODO: free一部分内存 */
+		case KOS_IOC_FREE:
+			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data from user. ret %d\n", ret);
+				 return -EFAULT;
+			}
+
+			pr_info("before message_buffer_free %ld\n", ksize(message_buffer));
+			size = data.value;
+			result = message_buffer_free(size);
+			memset(&data, 0, sizeof(struct ioctl_data));
+			data.result = result;
+			pr_info("after message_buffer_free %ld\n", ksize(message_buffer));
+			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data to user. ret %d\n", ret);
+				return -EFAULT;
+			}
+			break;
+		case KOS_IOC_SHOW:
+			if(message_buffer)
+				pr_info("message_buffer_show physical address 0x%llx\n", virt_to_phys(message_buffer));
+			else
+				pr_info("message_buffer not alloc\n");
+			break;
+		case KOS_IOC_INFO:
+			message_buffer_info();
+			break;
+		case KOS_IOC_INSERT:
+			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data from user. ret %d\n", ret);
+				 return -EFAULT;
+			}
+
+			message_buffer_insert(data.value, data.msg);
+			break;
+		case KOS_IOC_DEC:
 			break;
 		default:
 			break;
@@ -142,43 +262,38 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __a
 	return 0;
 }
 
-/* 文件操作结构体 */
 static const struct proc_ops proc_ops = {
-    .proc_read = my_proc_read,
-    .proc_write = my_proc_write,
+	.proc_read = my_proc_read,
+	.proc_write = my_proc_write,
 	.proc_mmap = my_proc_mmap,
 	.proc_ioctl = my_proc_ioctl,
 };
 
-/* 模块初始化函数 */
 static int __init my_proc_init(void)
 {
-    /* 创建 proc 文件 */
-    proc_file = proc_create(PROC_NAME, 0666, NULL, &proc_ops);
-    if (!proc_file) {
-        pr_err("Failed to create proc file\n");
-        return -ENOMEM;
-    }
+	proc_file = proc_create(PROC_NAME, 0666, NULL, &proc_ops);
+	if (!proc_file) {
+		pr_err("Failed to create proc file\n");
+	return -ENOMEM;
+	}
 
-    /* 初始化数据 */
-    strscpy(kernel_buf, "Hello from kernel!", MAX_BUF_SIZE);
-    data_size = strlen(kernel_buf);
+	strscpy(kernel_buf, "Hello from kernel!", MAX_BUF_SIZE);
+	data_size = strlen(kernel_buf);
 
-    pr_info("Proc file '%s' created\n", PROC_NAME);
-    return 0;
+	pr_info("Proc file '%s' created\n", PROC_NAME);
+	return 0;
 }
 
-/* 模块清理函数 */
 static void __exit my_proc_exit(void)
 {
-    /* 移除 proc 文件 */
-    proc_remove(proc_file);
-	pr_info("Proc file '%s' removed\n", PROC_NAME);
+	proc_remove(proc_file);
+//	if (message_buffer)
+//		kfree(message_buffer);
 }
 
 module_init(my_proc_init);
 module_exit(my_proc_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Your Name");
+MODULE_AUTHOR("yqx");
 MODULE_DESCRIPTION("A simple procfs read/write template using traditional methods");

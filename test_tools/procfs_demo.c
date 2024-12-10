@@ -19,8 +19,28 @@ int main()
 
 	/* 申请内存 */
 	data.value = MAX_BUF_SIZE;
-	ret = ioctl(fd,  KOS_IOC_ALLOC, &data);
+	ioctl(fd,  KOS_IOC_ALLOC, &data);
 	printf("alloc phys addr: 0x%lx\n", data.addr);
+
+	/* 初始化内存 */
+	strcpy(data.msg, "This is the test buffer\n");
+	ioctl(fd, KOS_IOC_INIT, &data);
+	printf("init buffer result, %s\n", data.result ? "success" : "failed");
+	
+	/* 部分释放  */
+	//data.value = 4096;
+	//ret = ioctl(fd, KOS_IOC_FREE, &data);
+	//printf("free buffer result, %s\n", data.result ? "success" : "failed");
+
+	/* 显示物理地址及内容 */
+	ioctl(fd, KOS_IOC_SHOW);
+
+	/* 显示可用容量 可用容量比例 起始物理地址 可用起始物理地址 */
+	ioctl(fd, KOS_IOC_INFO);
+
+	data.value = 0x40;
+	strcpy(data.msg, "The second buffer\n");
+	ioctl(fd, KOS_IOC_INSERT, &data);
 
 	message_buffer = mmap(NULL, MAX_BUF_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (message_buffer == MAP_FAILED) {
@@ -28,7 +48,11 @@ int main()
 		close(fd);
 		return -1;
 	}
+	
+	printf("message buffer %s\n", message_buffer);
+	//printf("message buffer + 0x40 %s\n", message_buffer + 0x40);
 
+	//munmap(message_buffer, MAX_BUF_SIZE);
 	close(fd);
 	return 0;
 }
