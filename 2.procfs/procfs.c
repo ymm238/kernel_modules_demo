@@ -1,7 +1,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
-#include <linux/uaccess.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <asm/io.h>
@@ -101,7 +100,7 @@ static void print_message_buffer(void)
 		if (*(message_buffer + i) != '\0' && *(message_buffer + i + 1) == '\0')
 		{
 			end_index = i;
-			pr_info(">> phys_addr start_index: 0x%llx, end_index: 0x%llx\ncontent: %s\n",
+			pr_info("phys_addr start_index: 0x%llx, end_index: 0x%llx\ncontent: %s\n",
 					phys_addr + start_index, phys_addr + end_index, message_buffer + start_index);
 		}
 	}
@@ -163,7 +162,7 @@ static void message_buffer_info(void)
 	remain = buffer_size - usage;
 	if (buffer_size)
 		percentage = remain * 100 / buffer_size;
-	pr_info("[message_buffer_info] remain %ld, percentage %d, start_address 0x%llx, available_address 0x%llx\n",
+	pr_info("remain %ld, percentage %d, start_address 0x%llx, available_address 0x%llx\n",
 					remain, percentage, start_address, available_address);
 	print_message_buffer();
 }
@@ -171,6 +170,21 @@ static void message_buffer_info(void)
 static void message_buffer_insert(unsigned long offset, char *buf)
 {
 	strcpy(message_buffer + offset, buf);
+	print_message_buffer();
+}
+
+static void message_buffer_dec(int size)
+{
+	int i, dec_count = 0;
+	for (i = 0; i < buffer_size; i++) {
+		if (*(message_buffer + i) == '\0') {
+			*(message_buffer + i) = '1';
+			dec_count ++;
+			if (dec_count == size)
+				break;
+		}
+	}
+	print_message_buffer();
 }
 
 static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __user arg)
@@ -181,6 +195,7 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 
 	switch(cmd) {
 		case KOS_IOC_ALLOC:
+			pr_info("================ KOS_IOC_ALLOC ================");
 			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data from user. ret %d\n", ret);
@@ -199,6 +214,7 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			}
 			break;
 		case KOS_IOC_INIT:
+			pr_info("================ KOS_IOC_INIT =================");
 			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data from user. ret %d\n", ret);
@@ -208,7 +224,7 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			result = message_buffer_init(data.msg);
 			memset(&data, 0, sizeof(struct ioctl_data));
 			data.result = result;
-			pr_info("message_buffer_init result: %s\n", result ? "success" : "failed");
+			pr_info("result: %s\n", result ? "success" : "failed");
 
 			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
 			if (ret) {
@@ -218,18 +234,19 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			break;
 		/* TODO: free一部分内存 */
 		case KOS_IOC_FREE:
+			pr_info("================ KOS_IOC_FREE =================");
 			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data from user. ret %d\n", ret);
 				 return -EFAULT;
 			}
 
-			pr_info("before message_buffer_free %ld\n", ksize(message_buffer));
+			pr_info("before %ld\n", ksize(message_buffer));
 			size = data.value;
 			result = message_buffer_free(size);
 			memset(&data, 0, sizeof(struct ioctl_data));
 			data.result = result;
-			pr_info("after message_buffer_free %ld\n", ksize(message_buffer));
+			pr_info("after %ld\n", ksize(message_buffer));
 			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data to user. ret %d\n", ret);
@@ -237,15 +254,18 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			}
 			break;
 		case KOS_IOC_SHOW:
+			pr_info("================ KOS_IOC_SHOW =================");
 			if(message_buffer)
-				pr_info("message_buffer_show physical address 0x%llx\n", virt_to_phys(message_buffer));
+				pr_info("physical address 0x%llx\n", virt_to_phys(message_buffer));
 			else
 				pr_info("message_buffer not alloc\n");
 			break;
 		case KOS_IOC_INFO:
+			pr_info("================ KOS_IOC_INFO =================");
 			message_buffer_info();
 			break;
 		case KOS_IOC_INSERT:
+			pr_info("================ KOS_IOC_INSERT ===============");
 			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data from user. ret %d\n", ret);
@@ -255,6 +275,16 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			message_buffer_insert(data.value, data.msg);
 			break;
 		case KOS_IOC_DEC:
+			pr_info("================ KOS_IOC_DEC ==================");
+			ret = copy_from_user(&data, arg, sizeof(struct ioctl_data));
+			if (ret) {
+				pr_err("Failed to copy data from user. ret %d\n", ret);
+				 return -EFAULT;
+			}
+
+			size = data.value;
+			message_buffer_dec(size);
+			memset(&data, 0 , sizeof(struct ioctl_data));
 			break;
 		default:
 			break;
