@@ -17,7 +17,7 @@ static struct proc_dir_entry *proc_file;
 static char kernel_buf[MAX_BUF_SIZE];	/* 内核缓冲区 */
 static size_t data_size;				/* 实际数据大小 */
 
-static char *message_buffer;
+static char *message_buffer[1024];
 static int buffer_size;
 
 static ssize_t my_proc_read(struct file *file, char __user *buf,
@@ -70,8 +70,7 @@ static vm_fault_t page_fault_handler(struct vm_fault *vmf)
 	pr_info("Page Fault occurred at address: 0x%llx, offset: %lu\n",
 		address, offset);
 
-
-	vmf_message_address = message_buffer + PAGE_SIZE * offset;
+	vmf_message_address = message_buffer[offset];
 	page = virt_to_page(vmf_message_address);
 
 	vmf->page = page;
@@ -91,85 +90,105 @@ static int my_proc_mmap(struct file *file, struct vm_area_struct *vma)
 
 static void print_message_buffer(void)
 {
-	int i, start_index = 0, end_index = 0;
-	phys_addr_t phys_addr = virt_to_phys(message_buffer);
-	for (i = 0; i < buffer_size - 1; i++)
-	{
-		if (*(message_buffer + i) == '\0' && *(message_buffer + i + 1) != '\0')
-			start_index = i + 1;
-		if (*(message_buffer + i) != '\0' && *(message_buffer + i + 1) == '\0')
+	int i, j, start_index = 0, end_index = 0;
+	char *buffer;
+	unsigned long phys_addr;
+	for (i = 0 ; i < 1024; i++) {
+		buffer = message_buffer[i];
+		if (buffer == NULL)
+			continue;
+		phys_addr = virt_to_phys(buffer);
+		for (j = 0; j < PAGE_SIZE - 1; j++)
 		{
-			end_index = i;
-			pr_info("phys_addr start_index: 0x%llx, end_index: 0x%llx\ncontent: %s\n",
-					phys_addr + start_index, phys_addr + end_index, message_buffer + start_index);
+			if (*(buffer + j) == '\0' && *(buffer + j + 1) != '\0')
+				start_index = j + 1;
+			if (*(buffer + j) != '\0' && *(buffer + j + 1) == '\0')
+			{
+				end_index = j;
+				pr_info("phys_addr start_index: 0x%llx, end_index: 0x%llx\ncontent: %s\n",
+						phys_addr + start_index, phys_addr + end_index, buffer + start_index);
+			}
 		}
 	}
 }
 
-static unsigned long message_buffer_alloc(int size)
+static char *message_buffer_alloc(int size)
 {
-	if (message_buffer)
-		return 0;
+	int i;
+	int pages = size / PAGE_SIZE;
+	char message_buffers_address[1024], addr[100];
 
-	message_buffer = kmalloc(size, GFP_KERNEL | __GFP_ZERO);
 	buffer_size = size;
-	if (message_buffer)
-		return virt_to_phys(message_buffer);
-	return -1;
+	for (i = 0; i < pages; i++) {
+		message_buffer[i] = kmalloc(size, GFP_KERNEL | __GFP_ZERO);
+		if (message_buffer[i]) {
+			sprintf(addr, "page %d phys_addr", i, virt_to_phys(message_buffer[i]));
+			strcat(message_buffers_address, addr);
+		}
+	}
+	return message_buffers_address;
 }
 
 static bool message_buffer_init(char* buf)
 {
 	if (*buf)
-		strcpy(message_buffer, buf);
-	else
-		memset(message_buffer, 0, buffer_size);
-	pr_info("messae buffer %s \n", message_buffer);
-	if (strcmp(message_buffer, buf))
+		strcpy(message_buffer[0], buf);
+	pr_info("messae buffer %s \n", message_buffer[0]);
+	if (strcmp(message_buffer[0], buf))
 		return false;
 	return true;
 }
 
 static bool message_buffer_free(int size)
 {
-	int ret;
-	ret = vm_munmap(message_buffer + buffer_size - size, size);
-	pr_info("free ret %d\n", ret);
-	if (ret == 0) {
-		buffer_size -= size;
-		return true;
+	int i, end;
+	int pages = size / PAGE_SIZE;
+
+	for (i = 0; i < 1024; i++) {
+		if (message_buffer[i] != NULL)
+			end = i + 1;
 	}
-	return false;
+	if (end < pages)
+		return false;
+	for (i = end - pages; i < end; i++) {
+		kfree(message_buffer[i]);
+		message_buffer[i] = NULL;
+	}
+	return true;
 }
 
 static void message_buffer_info(void)
 {
-	int i;
-	int percentage = 0;
-	unsigned long start_address, remain,
-				  available_address = 0UL,
-				  usage = 0UL;
-
-	start_address = virt_to_phys(message_buffer);
-
-	for (i = 0; i < buffer_size; i++) {
-		if (*(char *)(message_buffer + i) != '\0')
-			usage ++;
-		else
-			if (available_address == 0)
-				available_address = virt_to_phys(message_buffer + i);
+	int i, j, percentage;
+	char *buffer;
+	unsigned long start_address, remain, available_address, usage;
+	for (i = 0; i < 1024; i++) {
+		buffer = message_buffer[i];
+		if (buffer == NULL)
+			continue;
+		percentage = 0;
+		usage = 0UL;
+		available_address = 0UL;
+		start_address = virt_to_phys(buffer);
+		for (j = 0; j < buffer_size; j++) {
+			if (*(char *)(buffer + j) != '\0')
+				usage ++;
+			else
+				if (available_address == 0)
+					available_address = virt_to_phys(buffer + j);
+		}
+		remain = buffer_size - usage;
+		if (buffer_size)
+			percentage = remain * 100 / buffer_size;
+		pr_info("page %d, remain %ld, percentage %d, start_address 0x%llx, available_address 0x%llx\n",
+					i, remain, percentage, start_address, available_address);
 	}
-	remain = buffer_size - usage;
-	if (buffer_size)
-		percentage = remain * 100 / buffer_size;
-	pr_info("remain %ld, percentage %d, start_address 0x%llx, available_address 0x%llx\n",
-					remain, percentage, start_address, available_address);
 	print_message_buffer();
 }
 
 static void message_buffer_insert(unsigned long offset, char *buf)
 {
-	strcpy(message_buffer + offset, buf);
+	strcpy(message_buffer[0] + offset, buf);
 	print_message_buffer();
 }
 
@@ -177,8 +196,8 @@ static void message_buffer_dec(int size)
 {
 	int i, dec_count = 0;
 	for (i = 0; i < buffer_size; i++) {
-		if (*(message_buffer + i) == '\0') {
-			*(message_buffer + i) = '1';
+		if (*(message_buffer[0] + i) == '\0') {
+			*(message_buffer[0] + i) = '1';
 			dec_count ++;
 			if (dec_count == size)
 				break;
@@ -241,12 +260,10 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 				 return -EFAULT;
 			}
 
-			pr_info("before %ld\n", ksize(message_buffer));
 			size = data.value;
 			result = message_buffer_free(size);
 			memset(&data, 0, sizeof(struct ioctl_data));
 			data.result = result;
-			pr_info("after %ld\n", ksize(message_buffer));
 			ret = copy_to_user(arg, &data, sizeof(struct ioctl_data));
 			if (ret) {
 				pr_err("Failed to copy data to user. ret %d\n", ret);
@@ -255,10 +272,7 @@ static long my_proc_ioctl(struct file *file, unsigned int cmd, unsigned long __u
 			break;
 		case KOS_IOC_SHOW:
 			pr_info("================ KOS_IOC_SHOW =================");
-			if(message_buffer)
-				pr_info("physical address 0x%llx\n", virt_to_phys(message_buffer));
-			else
-				pr_info("message_buffer not alloc\n");
+			print_message_buffer();
 			break;
 		case KOS_IOC_INFO:
 			pr_info("================ KOS_IOC_INFO =================");
