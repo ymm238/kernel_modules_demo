@@ -86,12 +86,12 @@ int advise_process_vm_pageout(struct task_struct *task)
 		// TODO: 
 		// 当前do_madvise采用手动EXPORT_SYMBOL方式导出符号，
 		// 对于未导出符号的函数，采用kallsyms_lookup_name。
-		ret = do_madvise(mm, start, end, MADV_PAGEOUT);
- 		if (ret) {
-			 pr_err("do_madvise failed for VMA [0x%lx - 0x%lx] with error %d\n", start, end, ret);
- 		} else {
-			 pr_info("MADV_PAGEOUT applied for VMA [0x%lx - 0x%lx]\n", start, end);
- 		}
+		// ret = do_madvise(mm, start, end, MADV_PAGEOUT);
+ 		// if (ret) {
+		// 	 pr_err("do_madvise failed for VMA [0x%lx - 0x%lx] with error %d\n", start, end, ret);
+ 		// } else {
+		// 	 pr_info("MADV_PAGEOUT applied for VMA [0x%lx - 0x%lx]\n", start, end);
+ 		// }
 	}
 
 	return 0;
